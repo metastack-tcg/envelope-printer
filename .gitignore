@@ -1,0 +1,17 @@
+# Build output — the onefile exe is ~148MB, over GitHub's 100MB hard limit
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+
+# Third-party binary, fetched by fetch_tools.py rather than vendored:
+# it's GPLv3, and 20MB in git history is permanent bloat
+tools/*.exe
+tools/*.txt
+
+# Generated PDFs — these contain customer addresses
+*.pdf
+
+# Claude Code local permission grants — machine-specific
+.claude/settings.local.json
