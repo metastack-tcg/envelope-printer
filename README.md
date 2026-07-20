@@ -20,6 +20,10 @@ Fill in:
   but support is limited: gradients and un-outlined text may not render.
 - **Address sits** — *Below logo* suits most marks. *Under wordmark* tucks the
   address beside a logo whose icon sits left of its text.
+- **Font** — Fraunces ships with the app; the rest are Windows faces that carry a
+  real bold. Only families this machine can actually render are offered.
+- **Accent bar** — the coloured rule beside the recipient. Show or hide it, and
+  click the swatch to change its colour.
 - **Printer** — see below.
 
 Settings live in `%APPDATA%\Envelope Printer\config.json`.
@@ -30,7 +34,8 @@ Branding is saved as named **presets**, so one install can print for more than o
 business. Switch between them with the **Brand** dropdown on the main window — the
 preview and the next print run follow immediately.
 
-In Settings, the **Preset** field names the one you're editing:
+In Settings, **Editing** picks which preset the form is showing and **Name**
+renames it. Switching with unsaved edits asks before discarding them.
 
 - **Save** — keeps your changes. Changing the name renames the preset.
 - **Save as new preset →** — copies the current values under the new name and

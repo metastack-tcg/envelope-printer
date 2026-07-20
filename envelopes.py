@@ -38,11 +38,68 @@ def asset(*parts):
     return base.joinpath(*parts)
 
 
-# Fraunces, static cuts instantiated from the OFL variable font at opsz=14,
-# SOFT=0, WONK=0. See fonts/OFL.txt — it ships with the app.
-_FONTS = asset("fonts")
-for _n, _f in {"regular": "Regular", "italic": "Italic", "bold": "Bold"}.items():
-    pdfmetrics.registerFont(TTFont(f"Brand-{_n}", str(_FONTS / f"Fraunces-{_f}.ttf")))
+# Fraunces ships with the app (static cuts instantiated from the OFL variable
+# font at opsz=14, SOFT=0, WONK=0 — see fonts/OFL.txt). The rest are the Windows
+# faces that carry a real bold; each pair is verified before being offered.
+WINDOWS_FONTS = Path(r"C:\Windows\Fonts")
+FONT_FILES = {
+    "Fraunces": ("Fraunces-Regular.ttf", "Fraunces-Bold.ttf"),
+    "Georgia": ("georgia.ttf", "georgiab.ttf"),
+    "Times New Roman": ("times.ttf", "timesbd.ttf"),
+    "Garamond": ("GARA.TTF", "GARABD.TTF"),
+    "Book Antiqua": ("BKANT.TTF", "ANTQUAB.TTF"),
+    "Palatino Linotype": ("pala.ttf", "palab.ttf"),
+    "Constantia": ("constan.ttf", "constanb.ttf"),
+    "Cambria": ("cambria.ttc", "cambriab.ttf"),
+    "Arial": ("arial.ttf", "arialbd.ttf"),
+    "Calibri": ("calibri.ttf", "calibrib.ttf"),
+    "Verdana": ("verdana.ttf", "verdanab.ttf"),
+    "Tahoma": ("tahoma.ttf", "tahomabd.ttf"),
+    "Segoe UI": ("segoeui.ttf", "segoeuib.ttf"),
+    "Trebuchet MS": ("trebuc.ttf", "trebucbd.ttf"),
+}
+DEFAULT_FONT = "Fraunces"
+_registered = set()
+
+
+def _font_paths(name):
+    reg, bold = FONT_FILES[name]
+    if name == DEFAULT_FONT:
+        return asset("fonts", reg), asset("fonts", bold)
+    return WINDOWS_FONTS / reg, WINDOWS_FONTS / bold
+
+
+def use_font(name):
+    """Register a family on demand; returns its (regular, bold) reportlab names.
+    Falls back to the bundled font so a preset naming a font this machine lacks
+    still prints."""
+    if name not in FONT_FILES:
+        name = DEFAULT_FONT
+    if name not in _registered:
+        try:
+            reg, bold = _font_paths(name)
+            pdfmetrics.registerFont(TTFont(f"F:{name}", str(reg)))
+            pdfmetrics.registerFont(TTFont(f"F:{name}:b", str(bold)))
+            _registered.add(name)
+        except Exception:
+            if name == DEFAULT_FONT:
+                raise
+            return use_font(DEFAULT_FONT)
+    return f"F:{name}", f"F:{name}:b"
+
+
+def available_fonts():
+    """Families this machine can actually render, checked once."""
+    out = []
+    for name in FONT_FILES:
+        reg, bold = _font_paths(name)
+        if reg.exists() and bold.exists():
+            try:
+                use_font(name)
+                out.append(name)
+            except Exception:
+                pass
+    return out
 
 
 class Logo:
@@ -121,7 +178,7 @@ def rows(path):
             )
 
 
-def brand_block(c, cfg, logo):
+def brand_block(c, cfg, logo, regular):
     """Draw the top-left brand block. Returns the first return-address baseline.
 
     Margins are measured to the logo's actual ink, not its bounding box — art
@@ -142,30 +199,40 @@ def brand_block(c, cfg, logo):
     if name:  # no logo file: set the name as a type wordmark
         size = 16
         c.setFillColor(INK)
-        c.setFont("Brand-regular", size)
+        c.setFont(regular, size)
         base = H - mt - size * 0.78
         c.drawString(mx, base, name)
         return mx, base - 0.20 * inch
     return mx, H - mt - 10
 
 
+def tick_color(cfg):
+    try:
+        return HexColor(cfg.get("tick_color") or "#C2410C")
+    except (ValueError, AttributeError):
+        return ACCENT  # a bad colour in the config must not stop a print run
+
+
 def envelope(c, addr, cfg, logo):
-    x, y = brand_block(c, cfg, logo)
+    regular, bold = use_font(cfg.get("font") or DEFAULT_FONT)
+    x, y = brand_block(c, cfg, logo, regular)
 
     c.setFillColor(INK)
-    c.setFont("Brand-regular", 9.5)
+    c.setFont(regular, 9.5)
     for i, line in enumerate([s for s in cfg.get("return_address", []) if s.strip()]):
         c.drawString(x, y - i * 12.8, line)
 
-    # orange tick: clear of the USPS barcode zone and of any fold
-    c.setFillColor(ACCENT)
-    c.rect(TO_X - 0.22 * inch, TO_Y - 0.42 * inch, 0.045 * inch, 0.7 * inch, stroke=0, fill=1)
+    # accent bar: clear of the USPS barcode zone and of any fold
+    if cfg.get("tick_show", True):
+        c.setFillColor(tick_color(cfg))
+        c.rect(TO_X - 0.22 * inch, TO_Y - 0.42 * inch, 0.045 * inch, 0.7 * inch,
+               stroke=0, fill=1)
 
     name, a1, a2, city, st, zp = addr
     lines = [name, a1] + ([a2] if a2 else []) + [f"{city}, {st}  {zp}"]
     c.setFillColor(INK)
     for i, line in enumerate(lines):
-        c.setFont("Brand-bold" if i == 0 else "Brand-regular", 13)
+        c.setFont(bold if i == 0 else regular, 13)
         c.drawString(TO_X, TO_Y - i * 17.9, line.upper())
 
 

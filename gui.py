@@ -14,7 +14,7 @@ import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import colorchooser, filedialog, messagebox
 
 import fitz
 from PIL import Image, ImageTk
@@ -274,6 +274,34 @@ class Slider(tk.Canvas):
         self.create_rectangle(x - 3, y - 6, x + 3, y + 6, fill=ACCENT, outline="")
 
 
+class Swatch(tk.Frame):
+    """Colour well — click to open the OS picker."""
+
+    def __init__(self, parent, var, on_change=None):
+        super().__init__(parent, bg=HAIRLINE, bd=0)
+        self.var, self.cb = var, on_change
+        self.chip = tk.Label(self, width=4, height=1, bg=self._safe(), cursor="hand2")
+        self.chip.pack(padx=1, pady=1)
+        self.chip.bind("<Button-1>", lambda e: self.pick())
+        var.trace_add("write", lambda *a: self.chip.config(bg=self._safe()))
+
+    def _safe(self):
+        v = (self.var.get() or "").strip()
+        try:
+            self.winfo_rgb(v)
+            return v
+        except tk.TclError:
+            return ACCENT
+
+    def pick(self):
+        rgb, name = colorchooser.askcolor(color=self._safe(), parent=self,
+                                          title="Accent bar colour")
+        if name:
+            self.var.set(name)
+            if self.cb:
+                self.cb()
+
+
 class SettingsDialog(Dialog):
     """Edits the active preset, with a live preview — every spatial setting here
     (logo size, margins, where the address sits) is guesswork without one."""
@@ -289,9 +317,9 @@ class SettingsDialog(Dialog):
         split = tk.Frame(self.box, bg=PAPER)
         split.pack(fill="both", expand=True)
         form = tk.Frame(split, bg=PAPER)
-        form.pack(side="left", fill="y")
+        form.pack(side="left", fill="y", anchor="n")
         right = tk.Frame(split, bg=PAPER)
-        right.pack(side="left", fill="both", expand=True, padx=(24, 0))
+        right.pack(side="left", fill="y", anchor="n", padx=(24, 0))
 
         kicker(right, "preview").pack(fill="x", pady=(8, 0))
         shell = tk.Frame(right, bg=HAIRLINE)
@@ -307,8 +335,14 @@ class SettingsDialog(Dialog):
             var.trace_add("write", lambda *a: self.queue_preview())
             return var
 
+        self.editing = tk.StringVar(value=cfg["active"])
+        row = ledger_row(form, "Editing", 13)
+        self.edit_holder = tk.Frame(row, bg=PAPER)
+        self.edit_holder.pack(side="right")
+        self.build_edit_menu()
+
         self.pname = tk.StringVar(value=cfg["active"])
-        row = ledger_row(form, "Preset", 13)
+        row = ledger_row(form, "Name", 13)
         entry(row, self.pname, 24).pack(side="right", ipady=3)
 
         self.brand = watch(tk.StringVar(value=p["brand_name"]))
@@ -342,20 +376,43 @@ class SettingsDialog(Dialog):
         Slider(wrap, self.width, 0.5, 5.0, 126, self.queue_preview).pack(side="right")
 
         self.layout = tk.StringVar(value=p["logo_layout"])
-        row = ledger_row(form, "Address sits", 13)
+        row = ledger_row(right, "Address sits", 13)
         Segmented(row, self.layout, [("below", "Below logo"),
                                      ("hang", "Under wordmark")],
                   on_change=self.queue_preview).pack(side="right")
 
+        self.font = tk.StringVar(value=p.get("font", envelopes.DEFAULT_FONT))
+        row = ledger_row(right, "Font", 13)
+        fonts = envelopes.available_fonts() or [envelopes.DEFAULT_FONT]
+        if self.font.get() not in fonts:
+            fonts.insert(0, self.font.get())
+        om = tk.OptionMenu(row, self.font, *fonts,
+                           command=lambda *a: self.queue_preview())
+        om.config(font=sans(9), bg=PAPER, fg=INK, activebackground=ACCENT_TINT,
+                  relief="solid", bd=1, highlightthickness=0, anchor="w",
+                  padx=8, pady=2, width=21)
+        om["menu"].config(font=sans(9), bg=PAPER, fg=INK,
+                          activebackground=ACCENT_TINT, activeforeground=ACCENT, bd=0)
+        om.pack(side="right")
+
+        self.tick = tk.StringVar(value="on" if p.get("tick_show", True) else "off")
+        self.tick_col = watch(tk.StringVar(value=p.get("tick_color", ACCENT)))
+        row = ledger_row(right, "Accent bar", 13)
+        bar = tk.Frame(row, bg=PAPER)
+        bar.pack(side="right")
+        Swatch(bar, self.tick_col, self.queue_preview).pack(side="right", padx=(8, 0))
+        Segmented(bar, self.tick, [("on", "Show"), ("off", "Hide")],
+                  on_change=self.queue_preview).pack(side="right")
+
         self.mx = watch(tk.StringVar(value=str(p["margin_x_in"])))
-        row = ledger_row(form, "Margin left", 13)
+        row = ledger_row(right, "Margin left", 13)
         wrap = tk.Frame(row, bg=PAPER)
         wrap.pack(side="right")
         entry(wrap, self.mx, 5).pack(side="right", ipady=3, padx=(8, 0))
         Slider(wrap, self.mx, 0.2, 2.0, 126, self.queue_preview).pack(side="right")
 
         self.mt = watch(tk.StringVar(value=str(p["margin_top_in"])))
-        row = ledger_row(form, "Margin top", 13)
+        row = ledger_row(right, "Margin top", 13)
         wrap = tk.Frame(row, bg=PAPER)
         wrap.pack(side="right")
         entry(wrap, self.mt, 5).pack(side="right", ipady=3, padx=(8, 0))
@@ -377,7 +434,7 @@ class SettingsDialog(Dialog):
         hairline(form).pack(fill="x", pady=(8, 0))
         UnderlineAction(form, "Set up an envelope printer queue →",
                         lambda: self.wizard(parent)).pack(anchor="w", pady=(8, 0))
-        manage = tk.Frame(form, bg=PAPER)
+        manage = tk.Frame(right, bg=PAPER)
         manage.pack(fill="x", pady=(10, 0))
         UnderlineAction(manage, "Save as new preset →", self.save_as).pack(side="left")
         self.del_act = UnderlineAction(manage, "Delete preset →", self.delete)
@@ -387,6 +444,56 @@ class SettingsDialog(Dialog):
         self.actions("Save", self.save)
         self.draw_preview()
         self.center_on(parent, 20)
+
+    # --- preset switching ----------------------------------------------------
+
+    def build_edit_menu(self):
+        for w in self.edit_holder.winfo_children():
+            w.destroy()
+        om = tk.OptionMenu(self.edit_holder, self.editing, *config.names(self.cfg),
+                           command=self.switch_editing)
+        om.config(font=sans(9), bg=PAPER, fg=INK, activebackground=ACCENT_TINT,
+                  relief="solid", bd=1, highlightthickness=0, anchor="w",
+                  padx=8, pady=2, width=21)
+        om["menu"].config(font=sans(9), bg=PAPER, fg=INK,
+                          activebackground=ACCENT_TINT, activeforeground=ACCENT, bd=0)
+        om.pack()
+
+    def switch_editing(self, name):
+        """Load another preset into the form, guarding unsaved edits."""
+        if name == self.original:
+            return
+        stored = config.active({"presets": self.cfg["presets"], "active": self.original})
+        dirty = (self.collect(quiet=True) != stored) or self.pname.get().strip() != self.original
+        if dirty and not messagebox.askyesno(
+                "Discard changes",
+                f"Discard your unsaved changes to \“{self.original}\”?",
+                parent=self):
+            self.editing.set(self.original)
+            return
+        self.original = name
+        self.load_preset(name)
+
+    def load_preset(self, name):
+        p = config.active({"presets": self.cfg["presets"], "active": name})
+        self.pname.set(name)
+        self.editing.set(name)
+        self.brand.set(p["brand_name"])
+        addr = list(p["return_address"]) + ["", "", ""]
+        for i, v in enumerate(self.addr):
+            v.set(addr[i])
+        self.logo.set(p["logo_path"])
+        self.show_logo()
+        self.width.set(str(p["logo_width_in"]))
+        self.layout.set(p["logo_layout"])
+        self.font.set(p.get("font", envelopes.DEFAULT_FONT))
+        self.tick.set("on" if p.get("tick_show", True) else "off")
+        self.tick_col.set(p.get("tick_color", ACCENT))
+        self.mx.set(str(p["margin_x_in"]))
+        self.mt.set(str(p["margin_top_in"]))
+        self.del_act.enable(len(self.cfg["presets"]) > 1)
+        self.err.config(text="")
+        self.draw_preview()
 
     # --- live preview --------------------------------------------------------
 
@@ -412,7 +519,10 @@ class SettingsDialog(Dialog):
                 "logo_width_in": self.num(self.width, 2.35, 0.2, 6),
                 "logo_layout": self.layout.get(),
                 "margin_x_in": self.num(self.mx, 0.4, 0, 4),
-                "margin_top_in": self.num(self.mt, 0.4, 0, 3)}
+                "margin_top_in": self.num(self.mt, 0.4, 0, 3),
+                "font": self.font.get(),
+                "tick_show": self.tick.get() == "on",
+                "tick_color": self.tick_col.get()}
 
     def draw_preview(self):
         self._pending = None
@@ -485,32 +595,37 @@ class SettingsDialog(Dialog):
 
     # --- save ----------------------------------------------------------------
 
-    def collect(self):
-        """Validated preset fields, or None with the reason shown inline."""
+    def collect(self, quiet=False):
+        """Validated preset fields, or None with the reason shown inline.
+        quiet=True serves the dirty check, which must not flash errors at you."""
+        def fail(msg):
+            if not quiet:
+                self.err.config(text=msg)
+            return None
+
         try:
             w, mx, mt = float(self.width.get()), float(self.mx.get()), float(self.mt.get())
         except ValueError:
-            self.err.config(text="Logo width and margins must be numbers, e.g. 2.35.")
-            return None
+            return fail("Logo width and margins must be numbers, e.g. 2.35.")
         if not (0.2 <= w <= 6) or not (0 <= mx <= 4) or not (0 <= mt <= 3):
-            self.err.config(text="Logo width 0.2–6in, margins within the envelope.")
-            return None
+            return fail("Logo width 0.2–6in, margins within the envelope.")
         p = self.logo.get().strip()
         if p:
             if not Path(p).exists():
-                self.err.config(text="That logo file no longer exists.")
-                return None
+                return fail("That logo file no longer exists.")
             try:
                 envelopes.Logo(p, w)
             except Exception as e:
-                self.err.config(text=f"That logo could not be used: {e}")
-                return None
+                return fail(f"That logo could not be used: {e}")
         keep = config.active({"presets": self.cfg["presets"], "active": self.original})
         return {**keep,
                 "brand_name": self.brand.get().strip(),
                 "return_address": [v.get().strip() for v in self.addr],
                 "logo_path": p, "logo_width_in": w, "logo_layout": self.layout.get(),
-                "margin_x_in": mx, "margin_top_in": mt}
+                "margin_x_in": mx, "margin_top_in": mt,
+                "font": self.font.get(),
+                "tick_show": self.tick.get() == "on",
+                "tick_color": self.tick_col.get()}
 
     def commit(self):
         try:
@@ -551,6 +666,7 @@ class SettingsDialog(Dialog):
             self.err.config(text=f"“{name}” already exists — change the name first.")
             return
         self.cfg["presets"][name] = preset      # leaves the original untouched
+        self.original = name
         self.cfg["active"] = name
         self.cfg["printer"] = self.printer.get().strip()
         self.commit()
