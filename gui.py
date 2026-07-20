@@ -274,6 +274,43 @@ class Slider(tk.Canvas):
         self.create_rectangle(x - 3, y - 6, x + 3, y + 6, fill=ACCENT, outline="")
 
 
+class StyleToggles(tk.Frame):
+    """B / I / U, the shape everyone already knows from a text toolbar.
+    The value is a string of flags like 'bi' so it stores as plain JSON."""
+
+    LABELS = [("b", "B", "bold"), ("i", "I", "italic"), ("u", "U", "normal")]
+
+    def __init__(self, parent, var, on_change=None):
+        super().__init__(parent, bg=PAPER)
+        self.var, self.cb, self.btns = var, on_change, {}
+        for flag, text, weight in self.LABELS:
+            f = ("Georgia", 10, weight) if flag != "u" else ("Georgia", 10, "normal")
+            b = tk.Label(self, text=text, font=f, width=2, pady=2,
+                         cursor="hand2", bd=1, relief="solid")
+            b.pack(side="left")
+            b.bind("<Button-1>", lambda e, fl=flag: self.toggle(fl))
+            self.btns[flag] = b
+        # repaint on external writes too, or loading another preset leaves the
+        # buttons showing the previous preset's state
+        var.trace_add("write", lambda *a: self.paint())
+        self.paint()
+
+    def toggle(self, flag):
+        cur = set(self.var.get())
+        cur.symmetric_difference_update({flag})
+        self.var.set("".join(f for f, _, _ in self.LABELS if f in cur))
+        self.paint()
+        if self.cb:
+            self.cb()
+
+    def paint(self):
+        cur = self.var.get()
+        for flag, b in self.btns.items():
+            on = flag in cur
+            b.config(bg=ACCENT_TINT if on else PAPER, fg=ACCENT if on else MUTED,
+                     highlightbackground=ACCENT if on else HAIRLINE)
+
+
 class Swatch(tk.Frame):
     """Colour well — click to open the OS picker."""
 
@@ -355,6 +392,14 @@ class SettingsDialog(Dialog):
             row = ledger_row(form, "Return address" if i == 0 else "", 13)
             entry(row, v, 24).pack(side="right", ipady=3)
 
+        self.ret_style = tk.StringVar(value=p.get("return_style", ""))
+        row = ledger_row(form, "Address style", 13)
+        StyleToggles(row, self.ret_style, self.queue_preview).pack(side="right")
+
+        self.to_style = tk.StringVar(value=p.get("recipient_style", "b"))
+        row = ledger_row(form, "Recipient name", 13)
+        StyleToggles(row, self.to_style, self.queue_preview).pack(side="right")
+
         self.logo = tk.StringVar(value=p["logo_path"])
         row = ledger_row(form, "Logo", 13)
         holder = tk.Frame(row, bg=PAPER)
@@ -395,14 +440,30 @@ class SettingsDialog(Dialog):
                           activebackground=ACCENT_TINT, activeforeground=ACCENT, bd=0)
         om.pack(side="right")
 
-        self.tick = tk.StringVar(value="on" if p.get("tick_show", True) else "off")
-        self.tick_col = watch(tk.StringVar(value=p.get("tick_color", ACCENT)))
-        row = ledger_row(right, "Accent bar", 13)
+        self.accent = tk.StringVar(value=p.get("accent_style", "tick"))
+        self.accent_col = watch(tk.StringVar(value=p.get("accent_color", ACCENT)))
+        row = ledger_row(right, "Accent", 13)
         bar = tk.Frame(row, bg=PAPER)
         bar.pack(side="right")
-        Swatch(bar, self.tick_col, self.queue_preview).pack(side="right", padx=(8, 0))
-        Segmented(bar, self.tick, [("on", "Show"), ("off", "Hide")],
-                  on_change=self.queue_preview).pack(side="right")
+        Swatch(bar, self.accent_col, self.queue_preview).pack(side="right", padx=(8, 0))
+        labels = {"none": "None", "tick": "Bar", "bracket": "Bracket",
+                  "rule": "Rule under logo", "band": "Left edge band",
+                  "stripe": "Full-width line"}
+        self.accent_label = tk.StringVar(value=labels[self.accent.get()])
+
+        def set_accent(shown):
+            for k, v in labels.items():
+                if v == shown:
+                    self.accent.set(k)
+            self.queue_preview()
+
+        om = tk.OptionMenu(bar, self.accent_label, *labels.values(), command=set_accent)
+        om.config(font=sans(9), bg=PAPER, fg=INK, activebackground=ACCENT_TINT,
+                  relief="solid", bd=1, highlightthickness=0, anchor="w",
+                  padx=8, pady=2, width=15)
+        om["menu"].config(font=sans(9), bg=PAPER, fg=INK,
+                          activebackground=ACCENT_TINT, activeforeground=ACCENT, bd=0)
+        om.pack(side="right")
 
         self.mx = watch(tk.StringVar(value=str(p["margin_x_in"])))
         row = ledger_row(right, "Margin left", 13)
@@ -487,8 +548,13 @@ class SettingsDialog(Dialog):
         self.width.set(str(p["logo_width_in"]))
         self.layout.set(p["logo_layout"])
         self.font.set(p.get("font", envelopes.DEFAULT_FONT))
-        self.tick.set("on" if p.get("tick_show", True) else "off")
-        self.tick_col.set(p.get("tick_color", ACCENT))
+        self.accent.set(p.get("accent_style", "tick"))
+        self.accent_label.set({"none": "None", "tick": "Bar", "bracket": "Bracket",
+                               "rule": "Rule under logo", "band": "Left edge band",
+                               "stripe": "Full-width line"}[p.get("accent_style", "tick")])
+        self.accent_col.set(p.get("accent_color", ACCENT))
+        self.ret_style.set(p.get("return_style", ""))
+        self.to_style.set(p.get("recipient_style", "b"))
         self.mx.set(str(p["margin_x_in"]))
         self.mt.set(str(p["margin_top_in"]))
         self.del_act.enable(len(self.cfg["presets"]) > 1)
@@ -521,8 +587,10 @@ class SettingsDialog(Dialog):
                 "margin_x_in": self.num(self.mx, 0.4, 0, 4),
                 "margin_top_in": self.num(self.mt, 0.4, 0, 3),
                 "font": self.font.get(),
-                "tick_show": self.tick.get() == "on",
-                "tick_color": self.tick_col.get()}
+                "accent_style": self.accent.get(),
+                "accent_color": self.accent_col.get(),
+                "return_style": self.ret_style.get(),
+                "recipient_style": self.to_style.get()}
 
     def draw_preview(self):
         self._pending = None
@@ -624,8 +692,10 @@ class SettingsDialog(Dialog):
                 "logo_path": p, "logo_width_in": w, "logo_layout": self.layout.get(),
                 "margin_x_in": mx, "margin_top_in": mt,
                 "font": self.font.get(),
-                "tick_show": self.tick.get() == "on",
-                "tick_color": self.tick_col.get()}
+                "accent_style": self.accent.get(),
+                "accent_color": self.accent_col.get(),
+                "return_style": self.ret_style.get(),
+                "recipient_style": self.to_style.get()}
 
     def commit(self):
         try:

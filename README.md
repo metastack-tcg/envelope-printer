@@ -22,8 +22,13 @@ Fill in:
   address beside a logo whose icon sits left of its text.
 - **Font** — Fraunces ships with the app; the rest are Windows faces that carry a
   real bold. Only families this machine can actually render are offered.
-- **Accent bar** — the coloured rule beside the recipient. Show or hide it, and
-  click the swatch to change its colour.
+- **Accent** — the decorative mark, in any of six shapes: *None*, *Bar* beside
+  the recipient, *Bracket*, *Rule under logo*, *Left edge band*, or
+  *Full-width line*. Click the swatch to change its colour.
+- **Address style / Recipient name** — **B** / **I** / **U** for the return
+  address and the recipient's name line. Bold-italic uses a real bold-italic cut
+  where the font has one, and falls back to bold where it doesn't. The remaining
+  address lines stay regular, which is what USPS scanners read best.
 - **Printer** — see below.
 
 Settings live in `%APPDATA%\Envelope Printer\config.json`.

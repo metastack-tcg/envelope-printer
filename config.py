@@ -23,8 +23,10 @@ PRESET_DEFAULTS = {
     "margin_x_in": 0.4,
     "margin_top_in": 0.4,
     "font": "Fraunces",
-    "tick_show": True,           # the accent bar beside the recipient block
-    "tick_color": "#C2410C",
+    "accent_style": "tick",      # none|tick|bracket|rule|band|stripe
+    "accent_color": "#C2410C",
+    "return_style": "",          # any of b/i/u
+    "recipient_style": "b",      # styles the name line only
     # only used by logo_layout "hang": where the wordmark starts inside the logo
     # box and its baseline height, as fractions of the logo's size
     "wordmark_x": 0.268,
@@ -47,6 +49,16 @@ def path():
 
 def exists():
     return path().exists()
+
+
+def _upgrade(p):
+    """tick_show/tick_color predate the accent-style choice."""
+    if "tick_show" in p or "tick_color" in p:
+        p.setdefault("accent_style", "tick" if p.pop("tick_show", True) else "none")
+        p.setdefault("accent_color", p.pop("tick_color", "#C2410C"))
+    p.pop("tick_show", None)
+    p.pop("tick_color", None)
+    return p
 
 
 def _migrate(data):
@@ -72,6 +84,7 @@ def load():
             pass  # a corrupt config shouldn't brick the app — defaults still print
     if not cfg["presets"]:
         cfg["presets"] = {"Default": dict(PRESET_DEFAULTS)}
+    cfg["presets"] = {k: _upgrade(dict(v)) for k, v in cfg["presets"].items()}
     if cfg["active"] not in cfg["presets"]:
         cfg["active"] = next(iter(cfg["presets"]))
     return cfg

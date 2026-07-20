@@ -42,64 +42,96 @@ def asset(*parts):
 # font at opsz=14, SOFT=0, WONK=0 — see fonts/OFL.txt). The rest are the Windows
 # faces that carry a real bold; each pair is verified before being offered.
 WINDOWS_FONTS = Path(r"C:\Windows\Fonts")
+# (regular, bold, italic, bold-italic) — a missing cut falls back, see use_font
 FONT_FILES = {
-    "Fraunces": ("Fraunces-Regular.ttf", "Fraunces-Bold.ttf"),
-    "Georgia": ("georgia.ttf", "georgiab.ttf"),
-    "Times New Roman": ("times.ttf", "timesbd.ttf"),
-    "Garamond": ("GARA.TTF", "GARABD.TTF"),
-    "Book Antiqua": ("BKANT.TTF", "ANTQUAB.TTF"),
-    "Palatino Linotype": ("pala.ttf", "palab.ttf"),
-    "Constantia": ("constan.ttf", "constanb.ttf"),
-    "Cambria": ("cambria.ttc", "cambriab.ttf"),
-    "Arial": ("arial.ttf", "arialbd.ttf"),
-    "Calibri": ("calibri.ttf", "calibrib.ttf"),
-    "Verdana": ("verdana.ttf", "verdanab.ttf"),
-    "Tahoma": ("tahoma.ttf", "tahomabd.ttf"),
-    "Segoe UI": ("segoeui.ttf", "segoeuib.ttf"),
-    "Trebuchet MS": ("trebuc.ttf", "trebucbd.ttf"),
+    "Fraunces": ("Fraunces-Regular.ttf", "Fraunces-Bold.ttf", "Fraunces-Italic.ttf", None),
+    "Georgia": ("georgia.ttf", "georgiab.ttf", "georgiai.ttf", "georgiaz.ttf"),
+    "Times New Roman": ("times.ttf", "timesbd.ttf", "timesi.ttf", "timesbi.ttf"),
+    "Garamond": ("GARA.TTF", "GARABD.TTF", "GARAIT.TTF", None),
+    "Book Antiqua": ("BKANT.TTF", "ANTQUAB.TTF", None, "BKANTBI.TTF"),
+    "Palatino Linotype": ("pala.ttf", "palab.ttf", "palai.ttf", "palabi.ttf"),
+    "Constantia": ("constan.ttf", "constanb.ttf", "constani.ttf", "constanz.ttf"),
+    "Cambria": ("cambria.ttc", "cambriab.ttf", "cambriai.ttf", "cambriaz.ttf"),
+    "Arial": ("arial.ttf", "arialbd.ttf", "ariali.ttf", "arialbi.ttf"),
+    "Calibri": ("calibri.ttf", "calibrib.ttf", "calibrii.ttf", "calibriz.ttf"),
+    "Verdana": ("verdana.ttf", "verdanab.ttf", "verdanai.ttf", "verdanaz.ttf"),
+    "Tahoma": ("tahoma.ttf", "tahomabd.ttf", None, None),
+    "Segoe UI": ("segoeui.ttf", "segoeuib.ttf", "segoeuii.ttf", "segoeuiz.ttf"),
+    "Trebuchet MS": ("trebuc.ttf", "trebucbd.ttf", "trebucit.ttf", "trebucbi.ttf"),
 }
 DEFAULT_FONT = "Fraunces"
-_registered = set()
+CUTS = ("", "b", "i", "bi")     # index order matches FONT_FILES tuples
+_registered = {}
 
 
-def _font_paths(name):
-    reg, bold = FONT_FILES[name]
-    if name == DEFAULT_FONT:
-        return asset("fonts", reg), asset("fonts", bold)
-    return WINDOWS_FONTS / reg, WINDOWS_FONTS / bold
+def _font_path(name, i):
+    f = FONT_FILES[name][i]
+    if f is None:
+        return None
+    return asset("fonts", f) if name == DEFAULT_FONT else WINDOWS_FONTS / f
 
 
 def use_font(name):
-    """Register a family on demand; returns its (regular, bold) reportlab names.
-    Falls back to the bundled font so a preset naming a font this machine lacks
-    still prints."""
+    """Register a family on demand; returns {cut: reportlab name} for '', b, i, bi.
+    A cut this machine lacks falls back (bi -> b -> regular), and a family it
+    lacks entirely falls back to the bundled font, so a preset always prints."""
     if name not in FONT_FILES:
         name = DEFAULT_FONT
-    if name not in _registered:
+    if name in _registered:
+        return _registered[name]
+    got = {}
+    for i, cut in enumerate(CUTS):
+        p = _font_path(name, i)
+        if p is None or not p.exists():
+            continue
+        tag = f"F:{name}:{cut}" if cut else f"F:{name}"
         try:
-            reg, bold = _font_paths(name)
-            pdfmetrics.registerFont(TTFont(f"F:{name}", str(reg)))
-            pdfmetrics.registerFont(TTFont(f"F:{name}:b", str(bold)))
-            _registered.add(name)
+            pdfmetrics.registerFont(TTFont(tag, str(p)))
+            got[cut] = tag
         except Exception:
-            if name == DEFAULT_FONT:
-                raise
-            return use_font(DEFAULT_FONT)
-    return f"F:{name}", f"F:{name}:b"
+            pass
+    if "" not in got:                       # no regular: this family is unusable
+        if name == DEFAULT_FONT:
+            raise RuntimeError("bundled font missing")
+        return use_font(DEFAULT_FONT)
+    got.setdefault("b", got[""])
+    got.setdefault("i", got[""])
+    got.setdefault("bi", got.get("b", got[""]))
+    _registered[name] = got
+    return got
 
 
 def available_fonts():
     """Families this machine can actually render, checked once."""
     out = []
     for name in FONT_FILES:
-        reg, bold = _font_paths(name)
-        if reg.exists() and bold.exists():
+        p = _font_path(name, 0)
+        if p and p.exists():
             try:
                 use_font(name)
                 out.append(name)
             except Exception:
                 pass
     return out
+
+
+def styled(fonts, style):
+    """Pick the cut for a style string like 'bi'. Underline is drawn separately."""
+    cut = ("b" if "b" in style else "") + ("i" if "i" in style else "")
+    return fonts.get(cut or "", fonts[""])
+
+
+def draw_line(c, x, y, size, font, text, style, color):
+    """One line of text, with the underline drawn by hand — reportlab has no
+    underline attribute on drawString."""
+    c.setFillColor(color)
+    c.setFont(font, size)
+    c.drawString(x, y, text)
+    if "u" in style:
+        w = pdfmetrics.stringWidth(text, font, size)
+        c.setStrokeColor(color)
+        c.setLineWidth(max(0.5, size * 0.055))
+        c.line(x, y - size * 0.15, x + w, y - size * 0.15)
 
 
 class Logo:
@@ -206,34 +238,69 @@ def brand_block(c, cfg, logo, regular):
     return mx, H - mt - 10
 
 
-def tick_color(cfg):
+ACCENT_STYLES = ("none", "tick", "bracket", "rule", "band", "stripe")
+
+
+def accent_color(cfg):
     try:
-        return HexColor(cfg.get("tick_color") or "#C2410C")
+        return HexColor(cfg.get("accent_color") or "#C2410C")
     except (ValueError, AttributeError):
         return ACCENT  # a bad colour in the config must not stop a print run
 
 
-def envelope(c, addr, cfg, logo):
-    regular, bold = use_font(cfg.get("font") or DEFAULT_FONT)
-    x, y = brand_block(c, cfg, logo, regular)
-
-    c.setFillColor(INK)
-    c.setFont(regular, 9.5)
-    for i, line in enumerate([s for s in cfg.get("return_address", []) if s.strip()]):
-        c.drawString(x, y - i * 12.8, line)
-
-    # accent bar: clear of the USPS barcode zone and of any fold
-    if cfg.get("tick_show", True):
-        c.setFillColor(tick_color(cfg))
+def draw_accent(c, cfg, block_left, block_bottom, block_right):
+    """The decorative mark, in the same vocabulary as the original mockups.
+    Everything stays clear of the USPS barcode zone in the lower right."""
+    style = cfg.get("accent_style", "tick")
+    if style not in ACCENT_STYLES or style == "none":
+        return
+    col = accent_color(cfg)
+    c.setFillColor(col)
+    c.setStrokeColor(col)
+    if style == "tick":                    # vertical bar beside the recipient
         c.rect(TO_X - 0.22 * inch, TO_Y - 0.42 * inch, 0.045 * inch, 0.7 * inch,
                stroke=0, fill=1)
+    elif style == "bracket":               # corner bracket at the recipient
+        s = 0.28 * inch
+        x, y = TO_X - 0.3 * inch, TO_Y - 0.1 * inch
+        c.setLineWidth(1.4)
+        c.line(x, y, x, y + s)
+        c.line(x, y + s, x + s, y + s)
+    elif style == "rule":                  # hairline under the brand block
+        c.setLineWidth(1.1)
+        c.line(block_left, block_bottom - 0.16 * inch,
+               max(block_right, block_left + 1.2 * inch), block_bottom - 0.16 * inch)
+    elif style == "band":                  # band down the left edge
+        c.rect(0, 0, 0.2 * inch, H, stroke=0, fill=1)
+    elif style == "stripe":                # full-width hairline under the block
+        c.setLineWidth(0.9)
+        c.line(0, block_bottom - 0.16 * inch, W, block_bottom - 0.16 * inch)
+
+
+def envelope(c, addr, cfg, logo):
+    fonts = use_font(cfg.get("font") or DEFAULT_FONT)
+    x, y = brand_block(c, cfg, logo, fonts[""])
+
+    ret_style = cfg.get("return_style", "")
+    ret_font = styled(fonts, ret_style)
+    lines = [s for s in cfg.get("return_address", []) if s.strip()]
+    right = x
+    for i, line in enumerate(lines):
+        draw_line(c, x, y - i * 12.8, 9.5, ret_font, line, ret_style, INK)
+        right = max(right, x + pdfmetrics.stringWidth(line, ret_font, 9.5))
+    bottom = y - (len(lines) - 1) * 12.8 if lines else y
+
+    draw_accent(c, cfg, x, bottom, right)
 
     name, a1, a2, city, st, zp = addr
-    lines = [name, a1] + ([a2] if a2 else []) + [f"{city}, {st}  {zp}"]
-    c.setFillColor(INK)
-    for i, line in enumerate(lines):
-        c.setFont(bold if i == 0 else regular, 13)
-        c.drawString(TO_X, TO_Y - i * 17.9, line.upper())
+    to = [name, a1] + ([a2] if a2 else []) + [f"{city}, {st}  {zp}"]
+    nm_style = cfg.get("recipient_style", "b")
+    nm_font = styled(fonts, nm_style)
+    for i, line in enumerate(to):
+        if i == 0:
+            draw_line(c, TO_X, TO_Y, 13, nm_font, line.upper(), nm_style, INK)
+        else:
+            draw_line(c, TO_X, TO_Y - i * 17.9, 13, fonts[""], line.upper(), "", INK)
 
 
 def render(out, addrs, cfg=None):
