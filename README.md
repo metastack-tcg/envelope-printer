@@ -68,9 +68,14 @@ If the queue can't be created, run the app as administrator and retry.
 
 ## Printing
 
-1. Choose a CSV, or add addresses by hand.
+1. Choose a CSV, or add addresses by hand. International orders get the
+   country as the last address line automatically.
 2. Arrow through the previews. Click a recipient to jump to it.
-3. **Print all.**
+3. **Print all.** If one envelope jams or misprints, go to it and use
+   **Print this one** instead of re-running the batch.
+
+Very long addresses shrink slightly to stay on the envelope rather than
+clipping at the edge.
 
 Load envelopes in the manual/multi-purpose tray, **printing surface up** — most
 trays hold about 10, so a big batch is several loads.

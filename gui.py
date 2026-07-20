@@ -10,7 +10,9 @@ import ctypes
 import io
 import os
 import re
+import shutil
 import subprocess
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
 from pathlib import Path
@@ -31,6 +33,7 @@ ACCENT, ON_ACCENT, ACCENT_TINT = "#C2410C", "#FAF8F2", "#F6ECE4"
 SUMATRA = asset("tools", "SumatraPDF.exe")
 ICON = asset("assets", "brand", "app.ico")
 OUT = Path(os.environ.get("TEMP", ".")) / "envelope-printer-batch.pdf"
+SNAP = OUT.with_name("envelope-printer-job.pdf")  # frozen copy handed to the printer
 PREVIEW_DPI = 110
 APP_ID = "EnvelopePrinter.App.1"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -209,14 +212,14 @@ class Dialog(tk.Toplevel):
 
 class AddressDialog(Dialog):
     FIELDS = [("Name", "name"), ("Street", "a1"), ("Apt, suite", "a2"),
-              ("City", "city"), ("State", "st"), ("ZIP", "zp")]
+              ("City", "city"), ("State", "st"), ("ZIP", "zp"), ("Country", "ct")]
 
     def __init__(self, parent):
         super().__init__(parent, "recipient", "Add address")
         self.vars = {}
         for label, key in self.FIELDS:
             row = ledger_row(self.box, label)
-            v = tk.StringVar()
+            v = tk.StringVar(value="US" if key == "ct" else "")
             entry(row, v, 30).pack(side="right", ipady=3)
             self.vars[key] = v
         self.actions("Add", self.save)
@@ -225,17 +228,22 @@ class AddressDialog(Dialog):
     def save(self):
         v = {k: self.vars[k].get().strip() for _, k in self.FIELDS}
         # validated because a bad address here costs a stamp and an envelope
-        missing = [lab for lab, k in self.FIELDS if k != "a2" and not v[k]]
+        missing = [lab for lab, k in self.FIELDS
+                   if k in ("name", "a1", "city", "ct") and not v[k]]
         if missing:
             self.err.config(text="Still needed: " + ", ".join(missing).lower())
             return
-        if not re.fullmatch(r"[A-Za-z]{2}", v["st"]):
-            self.err.config(text="State should be the two-letter code, e.g. UT.")
-            return
-        if not re.fullmatch(r"\d{5}(-\d{4})?", v["zp"]):
-            self.err.config(text="ZIP should be 12345 or 12345-6789.")
-            return
-        self.result = (v["name"], v["a1"], v["a2"], v["city"], v["st"].upper(), v["zp"])
+        # US formats are enforced only for US mail — foreign addresses have
+        # their own postal codes and often no state at all
+        if v["ct"].upper() in ("US", "USA"):
+            if not re.fullmatch(r"[A-Za-z]{2}", v["st"]):
+                self.err.config(text="State should be the two-letter code, e.g. UT.")
+                return
+            if not re.fullmatch(r"\d{5}(-\d{4})?", v["zp"]):
+                self.err.config(text="ZIP should be 12345 or 12345-6789.")
+                return
+        self.result = (v["name"], v["a1"], v["a2"], v["city"], v["st"].upper(),
+                       v["zp"], v["ct"].upper())
         self.destroy()
 
 
@@ -846,6 +854,7 @@ class App:
         self.preset = config.active(self.cfg)
         self.pages, self.addrs, self.i = [], [], 0
         self.csv_name, self.manual, self._undo = None, 0, None
+        self._printing = False
         root.configure(bg=PAPER)
         root.title("Envelope printer")
 
@@ -945,6 +954,9 @@ class App:
         nxt = tk.Label(nav, text="▶", **arrow)
         nxt.pack(side="left", padx=8)
         nxt.bind("<Button-1>", lambda e: self.step(1))
+        self.print_one = UnderlineAction(nav, "Print this one →", self.print_current)
+        self.print_one.pack(side="left", padx=(24, 0))
+        self.print_one.enable(False)
 
         foot = tk.Frame(outer, bg=PAPER)
         foot.pack(fill="x", pady=(20, 0))
@@ -1102,6 +1114,7 @@ class App:
             w.destroy()
         self.row_widgets = []
         self.remove_act.enable(False)
+        self.print_one.enable(False)
         self.arm_print(False)
         self.fit()
 
@@ -1135,6 +1148,7 @@ class App:
         self.hero_sub.config(text=f"envelope{'s' if n != 1 else ''} ready to print")
         self.build_rows()
         self.remove_act.enable(True)
+        self.print_one.enable(True)
         self.i = max(0, min(select, n - 1))
         self.show()
         self.arm_print(True)
@@ -1209,6 +1223,25 @@ class App:
     def print_all(self):
         if not self.pages:
             return
+        n = len(self.pages)
+        if not messagebox.askyesno(
+            "Print",
+            f"Send {n} envelope{'s' if n != 1 else ''} to “{self.cfg['printer'].strip()}”?\n\n"
+            "Envelopes go in the manual / multi-purpose tray, printing surface up — "
+            "most trays hold about 10.\n\n"
+            "If your printer has envelope levers behind the back cover, set them "
+            "first, or the envelopes will come out creased.",
+        ):
+            return
+        self._print(None, f"Sent {n} to")
+
+    def print_current(self):
+        """Reprint just the shown envelope — the after-a-jam path. No confirm:
+        it costs one envelope and jams want a fast retry."""
+        if self.pages:
+            self._print(str(self.i + 1), f"Sent envelope {self.i + 1} to")
+
+    def _print(self, pages, done_msg):
         queue = self.cfg["printer"].strip()
         if not queue:
             messagebox.showinfo("No printer set",
@@ -1217,27 +1250,45 @@ class App:
         if not SUMATRA.exists():
             messagebox.showerror("Missing print engine", f"Not found:\n{SUMATRA}")
             return
-        n = len(self.pages)
-        if not messagebox.askyesno(
-            "Print",
-            f"Send {n} envelope{'s' if n != 1 else ''} to “{queue}”?\n\n"
-            "Envelopes go in the manual / multi-purpose tray, printing surface up — "
-            "most trays hold about 10.\n\n"
-            "If your printer has envelope levers behind the back cover, set them "
-            "first, or the envelopes will come out creased.",
-        ):
+        if self._printing:
+            self.say("Still sending the previous job…")
             return
-        self.say(f"Printing {n}…")
-        r = subprocess.run(
-            [str(SUMATRA), "-print-to", queue, "-print-settings", "noscale",
-             "-silent", str(OUT)],
-            capture_output=True, text=True, creationflags=NO_WINDOW)
-        if r.returncode == 0:
-            self.say(f"Sent {n} to {queue}.")
-        else:
-            self.say("Print failed.")
-            messagebox.showerror("Print failed",
-                                 f"SumatraPDF exited {r.returncode}.\n{r.stderr or r.stdout}")
+        # print from a snapshot, so a re-render (preset switch, add/remove) can't
+        # rewrite the file while SumatraPDF is reading it
+        try:
+            shutil.copy2(OUT, SNAP)
+        except OSError as e:
+            messagebox.showerror("Print failed", str(e))
+            return
+        settings = "noscale" if pages is None else f"{pages},noscale"
+        self._printing = True
+        self.say("Printing…")
+        result = {}
+
+        def work():  # off the Tk thread — spooling a batch can take a while
+            result["r"] = subprocess.run(
+                [str(SUMATRA), "-print-to", queue, "-print-settings", settings,
+                 "-silent", str(SNAP)],
+                capture_output=True, text=True, creationflags=NO_WINDOW)
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+
+        def poll():  # all UI happens back on the Tk thread
+            if t.is_alive():
+                self.root.after(200, poll)
+                return
+            self._printing = False
+            r = result["r"]
+            if r.returncode == 0:
+                self.say(f"{done_msg} {queue}.")
+            else:
+                self.say("Print failed.")
+                messagebox.showerror(
+                    "Print failed",
+                    f"SumatraPDF exited {r.returncode}.\n{r.stderr or r.stdout}")
+
+        self.root.after(200, poll)
 
 
 if __name__ == "__main__":
@@ -1258,6 +1309,7 @@ if __name__ == "__main__":
         # the batch PDF holds customer names and addresses — don't leave it in TEMP
         try:
             OUT.unlink(missing_ok=True)
+            SNAP.unlink(missing_ok=True)
         except OSError:
             pass
         root.destroy()

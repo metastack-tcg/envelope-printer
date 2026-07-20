@@ -28,8 +28,25 @@ import config
 INK, ACCENT = HexColor("#15130E"), HexColor("#C2410C")
 W, H = 9.5 * inch, 4.125 * inch  # #10 envelope, fed short-edge-first
 
-SAMPLE = ("Tyler Rebello", "1232 WILBUR AVE", "", "SWANSEA", "MA", "02777-2135")
+SAMPLE = ("Tyler Rebello", "1232 WILBUR AVE", "", "SWANSEA", "MA", "02777-2135", "US")
 TO_X, TO_Y = 3.7 * inch, 2.0 * inch
+
+# USPS wants the full country name in English as the last line. ISO codes from
+# TCGplayer's Country column; an unlisted code prints as-is rather than dropping.
+DOMESTIC = {"US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA", ""}
+COUNTRY_NAMES = {
+    "CA": "CANADA", "GB": "UNITED KINGDOM", "UK": "UNITED KINGDOM",
+    "AU": "AUSTRALIA", "NZ": "NEW ZEALAND", "JP": "JAPAN", "DE": "GERMANY",
+    "FR": "FRANCE", "IT": "ITALY", "ES": "SPAIN", "NL": "NETHERLANDS",
+    "BE": "BELGIUM", "AT": "AUSTRIA", "CH": "SWITZERLAND", "SE": "SWEDEN",
+    "NO": "NORWAY", "DK": "DENMARK", "FI": "FINLAND", "IE": "IRELAND",
+    "PT": "PORTUGAL", "PL": "POLAND", "CZ": "CZECH REPUBLIC", "GR": "GREECE",
+    "HU": "HUNGARY", "RO": "ROMANIA", "SG": "SINGAPORE", "HK": "HONG KONG",
+    "TW": "TAIWAN", "KR": "SOUTH KOREA", "MX": "MEXICO", "BR": "BRAZIL",
+    "AR": "ARGENTINA", "CL": "CHILE", "MY": "MALAYSIA", "TH": "THAILAND",
+    "PH": "PHILIPPINES", "ID": "INDONESIA", "IN": "INDIA", "IL": "ISRAEL",
+    "ZA": "SOUTH AFRICA", "AE": "UNITED ARAB EMIRATES",
+}
 
 
 def asset(*parts):
@@ -207,6 +224,7 @@ def rows(path):
                 r["City"].strip(),
                 r["State"].strip(),
                 r["PostalCode"].strip(),
+                (r.get("Country") or "US").strip(),
             )
 
 
@@ -292,15 +310,24 @@ def envelope(c, addr, cfg, logo):
 
     draw_accent(c, cfg, x, bottom, right)
 
-    name, a1, a2, city, st, zp = addr
-    to = [name, a1] + ([a2] if a2 else []) + [f"{city}, {st}  {zp}"]
+    name, a1, a2, city, st, zp, *rest = addr
+    country = (rest[0] if rest else "US").strip().upper()
+    cityline = city + (f", {st}" if st else "") + (f"  {zp}" if zp else "")
+    to = [name, a1] + ([a2] if a2 else []) + [cityline]
+    if country not in DOMESTIC:
+        to.append(COUNTRY_NAMES.get(country, country))
     nm_style = cfg.get("recipient_style", "b")
-    nm_font = styled(fonts, nm_style)
-    for i, line in enumerate(to):
-        if i == 0:
-            draw_line(c, TO_X, TO_Y, 13, nm_font, line.upper(), nm_style, INK)
-        else:
-            draw_line(c, TO_X, TO_Y - i * 17.9, 13, fonts[""], line.upper(), "", INK)
+    to_fonts = [styled(fonts, nm_style)] + [fonts[""]] * (len(to) - 1)
+    # a long address shrinks to fit rather than running off the envelope edge
+    size, maxw = 13.0, W - TO_X - 0.35 * inch
+    while size > 8.5 and any(
+            pdfmetrics.stringWidth(l.upper(), f, size) > maxw
+            for l, f in zip(to, to_fonts)):
+        size -= 0.5
+    lead = size * 1.38
+    for i, (line, f) in enumerate(zip(to, to_fonts)):
+        draw_line(c, TO_X, TO_Y - i * lead, size, f, line.upper(),
+                  nm_style if i == 0 else "", INK)
 
 
 def render(out, addrs, cfg=None):
@@ -348,13 +375,28 @@ def main():
 def demo():
     tmp = Path("_demo.csv")
     tmp.write_text(
-        "Order #,FirstName,LastName,Address1,Address2,City,State,PostalCode\n"
-        "1,Tyler,Rebello,1232 WILBUR AVE,,SWANSEA,MA,02777-2135\n"
-        ",,,,,,,\n"
+        "Order #,FirstName,LastName,Address1,Address2,City,State,PostalCode,Country\n"
+        "1,Tyler,Rebello,1232 WILBUR AVE,,SWANSEA,MA,02777-2135,US\n"
+        "2,Aiko,Tanaka,1-2-3 Ginza,,Chuo-ku Tokyo,,104-0061,JP\n"
+        ",,,,,,,,\n"
     )
     got = list(rows(tmp))
     tmp.unlink()
-    assert got == [SAMPLE], got
+    assert got[0] == SAMPLE, got[0]
+    assert got[1][6] == "JP" and got[1][4] == "", got[1]  # foreign: country kept, no state
+
+    # a CSV predating the Country column defaults to US
+    tmp.write_text(
+        "Order #,FirstName,LastName,Address1,Address2,City,State,PostalCode\n"
+        "1,Tyler,Rebello,1232 WILBUR AVE,,SWANSEA,MA,02777-2135\n")
+    assert list(rows(tmp))[0][6] == "US"
+    tmp.unlink()
+
+    # absurdly long foreign address must render (autofit), not crash or clip
+    import io
+    render(io.BytesIO(), [("A Very Long Customer Name That Keeps Going",
+                           "12345 Extraordinarily Long Boulevard Name Apt 27B",
+                           "", "SOMEWHERE FAR AWAY", "BC", "V6B 4Y8", "CA")])
 
     # Logo ink bounds: art usually carries blank padding, and image y runs down
     # while PDF y runs up — get that flip wrong and every logo sits off-corner.
