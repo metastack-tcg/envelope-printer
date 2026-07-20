@@ -176,7 +176,8 @@ def render(out, addrs, cfg=None):
     and can't silently scale. Upside down? Turn the stack — it's a loading choice."""
     cfg = cfg or config.active(config.load())  # cfg is one flat preset, not the file
     logo = load_logo(cfg)
-    c = pdfcanvas.Canvas(str(out), pagesize=(H, W))
+    # accept a path or any file-like, so previews can render straight to memory
+    c = pdfcanvas.Canvas(out if hasattr(out, "write") else str(out), pagesize=(H, W))
     for a in addrs:
         c.saveState()
         c.translate(H, 0)

@@ -7,6 +7,7 @@ app ships neutral and each user sets their own.
 """
 
 import ctypes
+import io
 import os
 import re
 import subprocess
@@ -132,17 +133,19 @@ def ledger_row(parent, label, width=12):
     hairline(parent).pack(fill="x", pady=(8, 0))
     row = tk.Frame(parent, bg=PAPER)
     row.pack(fill="x")
+    # pady 4: the settings form is 11 rows tall, and 6 pushed the dialog past
+    # the ~768px a small laptop screen can show
     tk.Label(row, text=label, font=sans(9), fg=FAINT, bg=PAPER,
-             anchor="w", width=width).pack(side="left", pady=6)
+             anchor="w", width=width).pack(side="left", pady=4)
     return row
 
 
 class Segmented(tk.Frame):
     """Small exclusive set — house style prefers this over a dropdown for 2-4."""
 
-    def __init__(self, parent, var, options):
+    def __init__(self, parent, var, options, on_change=None):
         super().__init__(parent, bg=PAPER)
-        self.var, self.btns = var, {}
+        self.var, self.btns, self.cb = var, {}, on_change
         for value, label in options:
             b = tk.Label(self, text=label, font=sans(9), padx=10, pady=3,
                          cursor="hand2", bd=1, relief="solid")
@@ -154,6 +157,8 @@ class Segmented(tk.Frame):
     def pick(self, v):
         self.var.set(v)
         self.paint()
+        if self.cb:
+            self.cb()
 
     def paint(self):
         for v, b in self.btns.items():
@@ -172,7 +177,7 @@ class Dialog(tk.Toplevel):
         self.transient(parent)
         self.resizable(False, False)
         self.box = tk.Frame(self, bg=PAPER)
-        self.box.pack(fill="both", expand=True, padx=24, pady=24)
+        self.box.pack(fill="both", expand=True, padx=22, pady=18)
         kicker(self.box, kick).pack(fill="x")
         tk.Label(self.box, text=title, font=serif(20), fg=INK, bg=PAPER,
                  anchor="w").pack(fill="x", pady=(2, 8))
@@ -234,79 +239,145 @@ class AddressDialog(Dialog):
         self.destroy()
 
 
+class Slider(tk.Canvas):
+    """Drag control for a spatial value. Tk's native Scale is too heavy for the
+    house style, and a bare number tells you nothing about what 2.35in looks like."""
+
+    def __init__(self, parent, var, lo, hi, width=126, on_change=None):
+        super().__init__(parent, width=width, height=20, bg=PAPER,
+                         highlightthickness=0, bd=0, cursor="sb_h_double_arrow")
+        self.var, self.lo, self.hi, self.w, self.cb = var, lo, hi, width, on_change
+        self.bind("<Button-1>", self._drag)
+        self.bind("<B1-Motion>", self._drag)
+        var.trace_add("write", lambda *a: self.paint())
+        self.paint()
+
+    def _frac(self):
+        try:
+            v = float(self.var.get())
+        except ValueError:
+            return 0.0
+        return min(max((v - self.lo) / (self.hi - self.lo), 0.0), 1.0)
+
+    def _drag(self, e):
+        f = min(max((e.x - 4) / (self.w - 8), 0.0), 1.0)
+        self.var.set(f"{self.lo + f * (self.hi - self.lo):.2f}")
+        if self.cb:
+            self.cb()
+
+    def paint(self):
+        self.delete("all")
+        y = 10
+        x = 4 + self._frac() * (self.w - 8)
+        self.create_line(4, y, self.w - 4, y, fill=HAIRLINE, width=1)
+        self.create_line(4, y, x, y, fill=ACCENT, width=2)
+        self.create_rectangle(x - 3, y - 6, x + 3, y + 6, fill=ACCENT, outline="")
+
+
 class SettingsDialog(Dialog):
-    """Edits the active preset. The main window switches between presets."""
+    """Edits the active preset, with a live preview — every spatial setting here
+    (logo size, margins, where the address sits) is guesswork without one."""
 
     def __init__(self, parent, cfg):
         super().__init__(parent, "setup", "Settings")
         self.cfg = {"presets": dict(cfg["presets"]), "active": cfg["active"],
                     "printer": cfg["printer"]}
         self.original = cfg["active"]
+        self._photo, self._pending = None, None
         p = config.active(cfg)
 
+        split = tk.Frame(self.box, bg=PAPER)
+        split.pack(fill="both", expand=True)
+        form = tk.Frame(split, bg=PAPER)
+        form.pack(side="left", fill="y")
+        right = tk.Frame(split, bg=PAPER)
+        right.pack(side="left", fill="both", expand=True, padx=(24, 0))
+
+        kicker(right, "preview").pack(fill="x", pady=(8, 0))
+        shell = tk.Frame(right, bg=HAIRLINE)
+        shell.pack(fill="x", pady=(4, 0))
+        self.pv = tk.Canvas(shell, width=430, height=192, bg=PAPER,
+                            highlightthickness=0, bd=0)
+        self.pv.pack(padx=1, pady=1)
+        self.pv_note = tk.Label(right, text="", font=sans(8), fg=MUTED, bg=PAPER,
+                                anchor="w", wraplength=430, justify="left")
+        self.pv_note.pack(fill="x", pady=(6, 0))
+
+        def watch(var):
+            var.trace_add("write", lambda *a: self.queue_preview())
+            return var
+
         self.pname = tk.StringVar(value=cfg["active"])
-        row = ledger_row(self.box, "Preset", 14)
-        entry(row, self.pname, 30).pack(side="right", ipady=3)
+        row = ledger_row(form, "Preset", 13)
+        entry(row, self.pname, 24).pack(side="right", ipady=3)
 
-        self.brand = tk.StringVar(value=p["brand_name"])
-        row = ledger_row(self.box, "Business name", 14)
-        entry(row, self.brand, 30).pack(side="right", ipady=3)
+        self.brand = watch(tk.StringVar(value=p["brand_name"]))
+        row = ledger_row(form, "Business name", 13)
+        entry(row, self.brand, 24).pack(side="right", ipady=3)
 
-        cfg = p  # the rest of the form edits preset fields
-        addr = list(cfg["return_address"]) + ["", "", ""]
-        self.addr = [tk.StringVar(value=addr[i]) for i in range(3)]
+        addr = list(p["return_address"]) + ["", "", ""]
+        self.addr = [watch(tk.StringVar(value=addr[i])) for i in range(3)]
         for i, v in enumerate(self.addr):
-            row = ledger_row(self.box, "Return address" if i == 0 else "", 14)
-            entry(row, v, 30).pack(side="right", ipady=3)
+            row = ledger_row(form, "Return address" if i == 0 else "", 13)
+            entry(row, v, 24).pack(side="right", ipady=3)
 
-        self.logo = tk.StringVar(value=cfg["logo_path"])
-        row = ledger_row(self.box, "Logo", 14)
-        right = tk.Frame(row, bg=PAPER)
-        right.pack(side="right")
-        self.logo_lbl = tk.Label(right, font=sans(9), fg=INK, bg=PAPER, anchor="e",
-                                 width=30, justify="right")
+        self.logo = tk.StringVar(value=p["logo_path"])
+        row = ledger_row(form, "Logo", 13)
+        holder = tk.Frame(row, bg=PAPER)
+        holder.pack(side="right")
+        self.logo_lbl = tk.Label(holder, font=sans(9), fg=INK, bg=PAPER, anchor="e",
+                                 width=26, justify="right")
         self.logo_lbl.pack(anchor="e")
-        picks = tk.Frame(right, bg=PAPER)
+        picks = tk.Frame(holder, bg=PAPER)
         picks.pack(anchor="e")
         UnderlineAction(picks, "Choose file →", self.pick_logo).pack(side="left")
         UnderlineAction(picks, "Clear", self.clear_logo).pack(side="left", padx=(12, 0))
         self.show_logo()
 
-        self.width = tk.StringVar(value=str(cfg["logo_width_in"]))
-        row = ledger_row(self.box, "Logo width (in)", 14)
-        entry(row, self.width, 8).pack(side="right", ipady=3)
+        self.width = watch(tk.StringVar(value=str(p["logo_width_in"])))
+        row = ledger_row(form, "Logo width", 13)
+        wrap = tk.Frame(row, bg=PAPER)
+        wrap.pack(side="right")
+        entry(wrap, self.width, 5).pack(side="right", ipady=3, padx=(8, 0))
+        Slider(wrap, self.width, 0.5, 5.0, 126, self.queue_preview).pack(side="right")
 
-        self.layout = tk.StringVar(value=cfg["logo_layout"])
-        row = ledger_row(self.box, "Address sits", 14)
+        self.layout = tk.StringVar(value=p["logo_layout"])
+        row = ledger_row(form, "Address sits", 13)
         Segmented(row, self.layout, [("below", "Below logo"),
-                                     ("hang", "Under wordmark")]).pack(side="right")
+                                     ("hang", "Under wordmark")],
+                  on_change=self.queue_preview).pack(side="right")
 
-        self.mx = tk.StringVar(value=str(cfg["margin_x_in"]))
-        self.mt = tk.StringVar(value=str(cfg["margin_top_in"]))
-        row = ledger_row(self.box, "Margin L / top", 14)
-        m = tk.Frame(row, bg=PAPER)
-        m.pack(side="right")
-        entry(m, self.mx, 6).pack(side="left", ipady=3)
-        entry(m, self.mt, 6).pack(side="left", padx=(6, 0), ipady=3)
+        self.mx = watch(tk.StringVar(value=str(p["margin_x_in"])))
+        row = ledger_row(form, "Margin left", 13)
+        wrap = tk.Frame(row, bg=PAPER)
+        wrap.pack(side="right")
+        entry(wrap, self.mx, 5).pack(side="right", ipady=3, padx=(8, 0))
+        Slider(wrap, self.mx, 0.2, 2.0, 126, self.queue_preview).pack(side="right")
+
+        self.mt = watch(tk.StringVar(value=str(p["margin_top_in"])))
+        row = ledger_row(form, "Margin top", 13)
+        wrap = tk.Frame(row, bg=PAPER)
+        wrap.pack(side="right")
+        entry(wrap, self.mt, 5).pack(side="right", ipady=3, padx=(8, 0))
+        Slider(wrap, self.mt, 0.2, 2.0, 126, self.queue_preview).pack(side="right")
 
         self.printer = tk.StringVar(value=self.cfg["printer"])
-        row = ledger_row(self.box, "Printer", 14)
+        row = ledger_row(form, "Printer", 13)
         names = printers() or [""]
         if self.printer.get() and self.printer.get() not in names:
             names.insert(0, self.printer.get())
         om = tk.OptionMenu(row, self.printer, *names)
         om.config(font=sans(9), bg=PAPER, fg=INK, activebackground=ACCENT_TINT,
                   relief="solid", bd=1, highlightthickness=0, anchor="w",
-                  padx=8, pady=2, width=26)
+                  padx=8, pady=2, width=21)
         om["menu"].config(font=sans(9), bg=PAPER, fg=INK,
                           activebackground=ACCENT_TINT, activeforeground=ACCENT, bd=0)
         om.pack(side="right")
 
-        hairline(self.box).pack(fill="x", pady=(8, 0))
-        UnderlineAction(self.box, "Set up an envelope printer queue →",
+        hairline(form).pack(fill="x", pady=(8, 0))
+        UnderlineAction(form, "Set up an envelope printer queue →",
                         lambda: self.wizard(parent)).pack(anchor="w", pady=(8, 0))
-
-        manage = tk.Frame(self.box, bg=PAPER)
+        manage = tk.Frame(form, bg=PAPER)
         manage.pack(fill="x", pady=(10, 0))
         UnderlineAction(manage, "Save as new preset →", self.save_as).pack(side="left")
         self.del_act = UnderlineAction(manage, "Delete preset →", self.delete)
@@ -314,11 +385,78 @@ class SettingsDialog(Dialog):
         self.del_act.enable(len(self.cfg["presets"]) > 1)
 
         self.actions("Save", self.save)
+        self.draw_preview()
         self.center_on(parent, 20)
+
+    # --- live preview --------------------------------------------------------
+
+    def queue_preview(self):
+        """Coalesce bursts of edits (typing, dragging) into a single render."""
+        if self._pending:
+            self.after_cancel(self._pending)
+        self._pending = self.after(60, self.draw_preview)
+
+    def num(self, var, default, lo, hi):
+        """Tolerant parse — a half-typed value must not blank the preview."""
+        try:
+            return min(max(float(var.get()), lo), hi)
+        except ValueError:
+            return default
+
+    def preview_cfg(self):
+        base = config.active({"presets": self.cfg["presets"], "active": self.original})
+        return {**base,
+                "brand_name": self.brand.get().strip(),
+                "return_address": [v.get().strip() for v in self.addr],
+                "logo_path": self.logo.get().strip(),
+                "logo_width_in": self.num(self.width, 2.35, 0.2, 6),
+                "logo_layout": self.layout.get(),
+                "margin_x_in": self.num(self.mx, 0.4, 0, 4),
+                "margin_top_in": self.num(self.mt, 0.4, 0, 3)}
+
+    def draw_preview(self):
+        self._pending = None
+        cfg = self.preview_cfg()
+        note = ""
+        p = cfg["logo_path"]
+        if p and not Path(p).exists():
+            note = "That logo file is missing — the business name is shown instead."
+        elif p:
+            try:
+                envelopes.Logo(p, cfg["logo_width_in"])
+            except Exception as e:
+                note = f"This logo can't be drawn ({e}). The name is shown instead."
+        try:
+            buf = io.BytesIO()
+            envelopes.render(buf, [envelopes.SAMPLE], cfg)
+            doc = fitz.open(stream=buf.getvalue(), filetype="pdf")
+            pix = doc[0].get_pixmap(dpi=96)
+            im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            doc.close()
+        except Exception as e:
+            self.pv.delete("all")
+            self.pv.create_text(215, 96, text=f"Preview failed:\n{e}", fill=MUTED,
+                                font=sans(9), width=380, justify="center")
+            return
+        im = im.rotate(-90, expand=True)  # authored landscape, paged portrait
+        cw, ch = int(self.pv["width"]), int(self.pv["height"])
+        s = min((cw - 8) / im.width, (ch - 8) / im.height)
+        im = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))),
+                       Image.LANCZOS)
+        self._photo = ImageTk.PhotoImage(im)
+        self.pv.delete("all")
+        x, y = (cw - im.width) // 2, (ch - im.height) // 2
+        self.pv.create_image(cw // 2, ch // 2, image=self._photo)
+        # outline the envelope edge — the point is seeing what sits close to it
+        self.pv.create_rectangle(x, y, x + im.width, y + im.height,
+                                 outline=HAIRLINE, width=1)
+        self.pv_note.config(text=note, fg=ACCENT if note else MUTED)
+
+    # --- logo ----------------------------------------------------------------
 
     def show_logo(self):
         p = self.logo.get()
-        self.logo_lbl.config(text=Path(p).name if p else "None — the business name is used",
+        self.logo_lbl.config(text=Path(p).name if p else "None — the name is used",
                              fg=INK if p else MUTED)
 
     def pick_logo(self):
@@ -328,6 +466,7 @@ class SettingsDialog(Dialog):
         if p:
             self.logo.set(p)
             self.show_logo()
+            self.draw_preview()
             if p.lower().endswith(".svg"):
                 self.err.config(
                     text="SVG support is limited — gradients and live text may not "
@@ -336,12 +475,15 @@ class SettingsDialog(Dialog):
     def clear_logo(self):
         self.logo.set("")
         self.show_logo()
+        self.draw_preview()
 
     def wizard(self, parent):
         d = PrinterSetupDialog(parent)
         parent.wait_window(d)
         if d.result:
             self.printer.set(d.result)
+
+    # --- save ----------------------------------------------------------------
 
     def collect(self):
         """Validated preset fields, or None with the reason shown inline."""

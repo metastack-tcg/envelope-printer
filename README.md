@@ -8,7 +8,11 @@ Prints addresses onto #10 business envelopes from a TCGplayer shipping export
 Windows will warn that it doesn't recognise the app — it's unsigned. Click
 **More info → Run anyway**.
 
-Settings opens automatically. Fill in:
+Settings opens automatically, with a **live preview** beside the form — the
+envelope redraws as you type or drag, so logo size and margins aren't guesswork.
+Drag the sliders until it looks right, or type an exact value.
+
+Fill in:
 
 - **Business name** — used as the printed name if you have no logo file.
 - **Return address** — up to three lines.
