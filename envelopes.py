@@ -111,9 +111,10 @@ def use_font(name):
         if name == DEFAULT_FONT:
             raise RuntimeError("bundled font missing")
         return use_font(DEFAULT_FONT)
+    got["real"] = set(got)                  # cuts that exist as actual files
     got.setdefault("b", got[""])
     got.setdefault("i", got[""])
-    got.setdefault("bi", got.get("b", got[""]))
+    got.setdefault("bi", got["b"])
     _registered[name] = got
     return got
 
@@ -133,17 +134,34 @@ def available_fonts():
 
 
 def styled(fonts, style):
-    """Pick the cut for a style string like 'bi'. Underline is drawn separately."""
-    cut = ("b" if "b" in style else "") + ("i" if "i" in style else "")
-    return fonts.get(cut or "", fonts[""])
+    """Font tag for a style string like 'bi', plus whether italic must be faked.
+    A family missing the requested italic cut gets its closest upright cut
+    slanted at draw time, so B+I never silently loses the I."""
+    want_b, want_i = "b" in style, "i" in style
+    cut = ("b" if want_b else "") + ("i" if want_i else "")
+    if not cut:
+        return fonts[""], False
+    if cut in fonts["real"]:
+        return fonts[cut], False
+    if want_i:
+        base = "b" if (want_b and "b" in fonts["real"]) else ""
+        return fonts[base or ""], True
+    return fonts.get(cut, fonts[""]), False
 
 
-def draw_line(c, x, y, size, font, text, style, color):
-    """One line of text, with the underline drawn by hand — reportlab has no
-    underline attribute on drawString."""
+def draw_line(c, x, y, size, font, text, style, color, oblique=False):
+    """One line of text. Underline is stroked by hand (reportlab has no underline
+    attribute); oblique slants the glyphs ~12deg for families without an italic cut."""
     c.setFillColor(color)
     c.setFont(font, size)
-    c.drawString(x, y, text)
+    if oblique:
+        c.saveState()
+        c.translate(x, y)
+        c.transform(1, 0, 0.21, 1, 0, 0)   # tan(12deg): the conventional slant
+        c.drawString(0, 0, text)
+        c.restoreState()
+    else:
+        c.drawString(x, y, text)
     if "u" in style:
         w = pdfmetrics.stringWidth(text, font, size)
         c.setStrokeColor(color)
@@ -303,11 +321,11 @@ def envelope(c, addr, cfg, logo):
     y -= cfg.get("addr_dy_in", 0) * inch
 
     ret_style = cfg.get("return_style", "")
-    ret_font = styled(fonts, ret_style)
+    ret_font, ret_ob = styled(fonts, ret_style)
     lines = [s for s in cfg.get("return_address", []) if s.strip()]
     right = x
     for i, line in enumerate(lines):
-        draw_line(c, x, y - i * 12.8, 9.5, ret_font, line, ret_style, INK)
+        draw_line(c, x, y - i * 12.8, 9.5, ret_font, line, ret_style, INK, ret_ob)
         right = max(right, x + pdfmetrics.stringWidth(line, ret_font, 9.5))
     bottom = y - (len(lines) - 1) * 12.8 if lines else y
 
@@ -320,7 +338,8 @@ def envelope(c, addr, cfg, logo):
     if country not in DOMESTIC:
         to.append(COUNTRY_NAMES.get(country, country))
     nm_style = cfg.get("recipient_style", "b")
-    to_fonts = [styled(fonts, nm_style)] + [fonts[""]] * (len(to) - 1)
+    nm_font, nm_ob = styled(fonts, nm_style)
+    to_fonts = [nm_font] + [fonts[""]] * (len(to) - 1)
     # a long address shrinks to fit rather than running off the envelope edge
     size, maxw = 13.0, W - TO_X - 0.35 * inch
     while size > 8.5 and any(
@@ -330,7 +349,7 @@ def envelope(c, addr, cfg, logo):
     lead = size * 1.38
     for i, (line, f) in enumerate(zip(to, to_fonts)):
         draw_line(c, TO_X, TO_Y - i * lead, size, f, line.upper(),
-                  nm_style if i == 0 else "", INK)
+                  nm_style if i == 0 else "", INK, nm_ob if i == 0 else False)
 
 
 def render(out, addrs, cfg=None):
@@ -400,6 +419,14 @@ def demo():
     render(io.BytesIO(), [("A Very Long Customer Name That Keeps Going",
                            "12345 Extraordinarily Long Boulevard Name Apt 27B",
                            "", "SOMEWHERE FAR AWAY", "BC", "V6B 4Y8", "CA")])
+
+    # B+I on a family with no bold-italic file must slant, not silently drop the I
+    fr = use_font("Fraunces")
+    f, ob = styled(fr, "bi")
+    assert ob and f == fr["b"], (f, ob)
+    ge = use_font("Georgia")
+    f, ob = styled(ge, "bi")
+    assert not ob and f == ge["bi"], (f, ob)   # real cut wins when it exists
 
     # the address nudge must actually reach the page
     a, b = io.BytesIO(), io.BytesIO()

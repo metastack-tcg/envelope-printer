@@ -10,7 +10,8 @@ Windows will warn that it doesn't recognise the app — it's unsigned. Click
 
 Settings opens automatically, with a **live preview** beside the form — the
 envelope redraws as you type or drag, so logo size and margins aren't guesswork.
-Drag the sliders until it looks right, or type an exact value.
+Drag the sliders until it looks right, or type an exact value. **Scroll over the
+preview to zoom in** for fine alignment, drag to pan, double-click to reset.
 
 Fill in:
 
@@ -29,7 +30,8 @@ Fill in:
   *Full-width line*. Click the swatch to change its colour.
 - **Address style / Recipient name** — **B** / **I** / **U** for the return
   address and the recipient's name line. Bold-italic uses a real bold-italic cut
-  where the font has one, and falls back to bold where it doesn't. The remaining
+  where the font has one; families without one get the bold cut slanted, so
+  the italic never silently disappears. The remaining
   address lines stay regular, which is what USPS scanners read best.
 - **Printer** — see below.
 

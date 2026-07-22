@@ -367,12 +367,22 @@ class SettingsDialog(Dialog):
         right = tk.Frame(split, bg=PAPER)
         right.pack(side="left", fill="y", anchor="n", padx=(24, 0))
 
-        kicker(right, "preview").pack(fill="x", pady=(8, 0))
+        ph = tk.Frame(right, bg=PAPER)
+        ph.pack(fill="x", pady=(8, 0))
+        kicker(ph, "preview").pack(side="left")
+        tk.Label(ph, text="scroll to zoom · drag to pan · double-click resets",
+                 font=sans(8), fg=FAINT, bg=PAPER).pack(side="right")
         shell = tk.Frame(right, bg=HAIRLINE)
         shell.pack(fill="x", pady=(4, 0))
         self.pv = tk.Canvas(shell, width=430, height=192, bg=PAPER,
                             highlightthickness=0, bd=0)
         self.pv.pack(padx=1, pady=1)
+        self.zoom, self.panx, self.pany = 1.0, 0.5, 0.5
+        self._disp = self._drag_from = None
+        self.pv.bind("<MouseWheel>", self._pv_zoom)
+        self.pv.bind("<Button-1>", self._pv_grab)
+        self.pv.bind("<B1-Motion>", self._pv_drag)
+        self.pv.bind("<Double-Button-1>", self._pv_reset)
         self.pv_note = tk.Label(right, text="", font=sans(8), fg=MUTED, bg=PAPER,
                                 anchor="w", wraplength=430, justify="left")
         self.pv_note.pack(fill="x", pady=(6, 0))
@@ -525,6 +535,9 @@ class SettingsDialog(Dialog):
         self.del_act.enable(len(self.cfg["presets"]) > 1)
 
         self.actions("Save", self.save)
+        # Dialog binds Return to the primary action; in a form this dense, Enter
+        # while typing in a field would save-and-close mid-edit
+        self.unbind("<Return>")
         self.draw_preview()
         self.center_on(parent, 20)
 
@@ -634,7 +647,7 @@ class SettingsDialog(Dialog):
             buf = io.BytesIO()
             envelopes.render(buf, [envelopes.SAMPLE], cfg)
             doc = fitz.open(stream=buf.getvalue(), filetype="pdf")
-            pix = doc[0].get_pixmap(dpi=96)
+            pix = doc[0].get_pixmap(dpi=min(288, int(96 * self.zoom)))
             im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             doc.close()
         except Exception as e:
@@ -644,17 +657,48 @@ class SettingsDialog(Dialog):
             return
         im = im.rotate(-90, expand=True)  # authored landscape, paged portrait
         cw, ch = int(self.pv["width"]), int(self.pv["height"])
-        s = min((cw - 8) / im.width, (ch - 8) / im.height)
-        im = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))),
-                       Image.LANCZOS)
-        self._photo = ImageTk.PhotoImage(im)
+        s = min((cw - 8) / im.width, (ch - 8) / im.height) * self.zoom
+        W2, H2 = max(1, int(im.width * s)), max(1, int(im.height * s))
+        im = im.resize((W2, H2), Image.LANCZOS)
+        self._disp = (W2, H2)
         self.pv.delete("all")
-        x, y = (cw - im.width) // 2, (ch - im.height) // 2
-        self.pv.create_image(cw // 2, ch // 2, image=self._photo)
-        # outline the envelope edge — the point is seeing what sits close to it
-        self.pv.create_rectangle(x, y, x + im.width, y + im.height,
-                                 outline=HAIRLINE, width=1)
+        if W2 <= cw and H2 <= ch:
+            self._photo = ImageTk.PhotoImage(im)
+            x, y = (cw - W2) // 2, (ch - H2) // 2
+            self.pv.create_image(cw // 2, ch // 2, image=self._photo)
+            # outline the envelope edge — the point is seeing what sits close to it
+            self.pv.create_rectangle(x, y, x + W2, y + H2,
+                                     outline=HAIRLINE, width=1)
+        else:
+            # zoomed: show a viewport around the pan point
+            x0 = min(max(int(self.panx * W2 - cw / 2), 0), max(0, W2 - cw))
+            y0 = min(max(int(self.pany * H2 - ch / 2), 0), max(0, H2 - ch))
+            self._photo = ImageTk.PhotoImage(
+                im.crop((x0, y0, min(x0 + cw, W2), min(y0 + ch, H2))))
+            self.pv.create_image(cw // 2, ch // 2, image=self._photo)
         self.pv_note.config(text=note, fg=ACCENT if note else MUTED)
+
+    def _pv_zoom(self, e):
+        self.zoom = min(4.0, max(1.0, self.zoom * (1.25 if e.delta > 0 else 0.8)))
+        if self.zoom <= 1.001:
+            self.zoom, self.panx, self.pany = 1.0, 0.5, 0.5
+        self.draw_preview()
+
+    def _pv_grab(self, e):
+        self._drag_from = (e.x, e.y, self.panx, self.pany)
+
+    def _pv_drag(self, e):
+        if self.zoom <= 1 or not self._disp or not self._drag_from:
+            return
+        x0, y0, px, py = self._drag_from
+        W2, H2 = self._disp
+        self.panx = min(max(px - (e.x - x0) / W2, 0.0), 1.0)
+        self.pany = min(max(py - (e.y - y0) / H2, 0.0), 1.0)
+        self.draw_preview()
+
+    def _pv_reset(self, e=None):
+        self.zoom, self.panx, self.pany = 1.0, 0.5, 0.5
+        self.draw_preview()
 
     # --- logo ----------------------------------------------------------------
 
