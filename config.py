@@ -22,6 +22,8 @@ PRESET_DEFAULTS = {
     "logo_layout": "below",      # "below" (generic) | "hang" (under a wordmark)
     "margin_x_in": 0.4,
     "margin_top_in": 0.4,
+    "addr_dx_in": 0.0,           # nudges the return address off its computed spot
+    "addr_dy_in": 0.0,
     "font": "Fraunces",
     "accent_style": "tick",      # none|tick|bracket|rule|band|stripe
     "accent_color": "#C2410C",

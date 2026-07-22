@@ -155,6 +155,7 @@ class Segmented(tk.Frame):
             b.pack(side="left")
             b.bind("<Button-1>", lambda e, v=value: self.pick(v))
             self.btns[value] = b
+        var.trace_add("write", lambda *a: self.paint())
         self.paint()
 
     def pick(self, v):
@@ -487,6 +488,19 @@ class SettingsDialog(Dialog):
         entry(wrap, self.mt, 5).pack(side="right", ipady=3, padx=(8, 0))
         Slider(wrap, self.mt, 0.2, 2.0, 126, self.queue_preview).pack(side="right")
 
+        # moves the return address off its computed spot, logo stays put
+        self.adx = watch(tk.StringVar(value=str(p.get("addr_dx_in", 0.0))))
+        self.ady = watch(tk.StringVar(value=str(p.get("addr_dy_in", 0.0))))
+        row = ledger_row(right, "Address nudge", 13)
+        wrap = tk.Frame(row, bg=PAPER)
+        wrap.pack(side="right")
+        entry(wrap, self.ady, 5).pack(side="right", ipady=3, padx=(6, 0))
+        Slider(wrap, self.ady, -0.5, 1.5, 80, self.queue_preview).pack(side="right")
+        tk.Label(wrap, text="↓", font=sans(9), fg=FAINT, bg=PAPER).pack(side="right", padx=(12, 2))
+        entry(wrap, self.adx, 5).pack(side="right", ipady=3, padx=(6, 0))
+        Slider(wrap, self.adx, -0.5, 2.0, 80, self.queue_preview).pack(side="right")
+        tk.Label(wrap, text="→", font=sans(9), fg=FAINT, bg=PAPER).pack(side="right", padx=(0, 2))
+
         self.printer = tk.StringVar(value=self.cfg["printer"])
         row = ledger_row(form, "Printer", 13)
         names = printers() or [""]
@@ -565,6 +579,8 @@ class SettingsDialog(Dialog):
         self.to_style.set(p.get("recipient_style", "b"))
         self.mx.set(str(p["margin_x_in"]))
         self.mt.set(str(p["margin_top_in"]))
+        self.adx.set(str(p.get("addr_dx_in", 0.0)))
+        self.ady.set(str(p.get("addr_dy_in", 0.0)))
         self.del_act.enable(len(self.cfg["presets"]) > 1)
         self.err.config(text="")
         self.draw_preview()
@@ -594,6 +610,8 @@ class SettingsDialog(Dialog):
                 "logo_layout": self.layout.get(),
                 "margin_x_in": self.num(self.mx, 0.4, 0, 4),
                 "margin_top_in": self.num(self.mt, 0.4, 0, 3),
+                "addr_dx_in": self.num(self.adx, 0.0, -2, 3),
+                "addr_dy_in": self.num(self.ady, 0.0, -2, 3),
                 "font": self.font.get(),
                 "accent_style": self.accent.get(),
                 "accent_color": self.accent_col.get(),
@@ -681,8 +699,11 @@ class SettingsDialog(Dialog):
 
         try:
             w, mx, mt = float(self.width.get()), float(self.mx.get()), float(self.mt.get())
+            adx, ady = float(self.adx.get()), float(self.ady.get())
         except ValueError:
-            return fail("Logo width and margins must be numbers, e.g. 2.35.")
+            return fail("Logo width, margins and nudge must be numbers, e.g. 2.35.")
+        if not (-2 <= adx <= 3) or not (-2 <= ady <= 3):
+            return fail("Address nudge should stay within ±2 inches.")
         if not (0.2 <= w <= 6) or not (0 <= mx <= 4) or not (0 <= mt <= 3):
             return fail("Logo width 0.2–6in, margins within the envelope.")
         p = self.logo.get().strip()
@@ -699,6 +720,7 @@ class SettingsDialog(Dialog):
                 "return_address": [v.get().strip() for v in self.addr],
                 "logo_path": p, "logo_width_in": w, "logo_layout": self.layout.get(),
                 "margin_x_in": mx, "margin_top_in": mt,
+                "addr_dx_in": adx, "addr_dy_in": ady,
                 "font": self.font.get(),
                 "accent_style": self.accent.get(),
                 "accent_color": self.accent_col.get(),

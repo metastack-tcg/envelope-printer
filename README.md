@@ -20,6 +20,8 @@ Fill in:
   but support is limited: gradients and un-outlined text may not render.
 - **Address sits** — *Below logo* suits most marks. *Under wordmark* tucks the
   address beside a logo whose icon sits left of its text.
+- **Address nudge** — moves the return address off its computed spot (right and
+  down; negative values go the other way). The logo stays put.
 - **Font** — Fraunces ships with the app; the rest are Windows faces that carry a
   real bold. Only families this machine can actually render are offered.
 - **Accent** — the decorative mark, in any of six shapes: *None*, *Bar* beside

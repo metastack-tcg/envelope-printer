@@ -298,6 +298,9 @@ def draw_accent(c, cfg, block_left, block_bottom, block_right):
 def envelope(c, addr, cfg, logo):
     fonts = use_font(cfg.get("font") or DEFAULT_FONT)
     x, y = brand_block(c, cfg, logo, fonts[""])
+    # user nudge: moves the return address without moving the logo
+    x += cfg.get("addr_dx_in", 0) * inch
+    y -= cfg.get("addr_dy_in", 0) * inch
 
     ret_style = cfg.get("return_style", "")
     ret_font = styled(fonts, ret_style)
@@ -397,6 +400,14 @@ def demo():
     render(io.BytesIO(), [("A Very Long Customer Name That Keeps Going",
                            "12345 Extraordinarily Long Boulevard Name Apt 27B",
                            "", "SOMEWHERE FAR AWAY", "BC", "V6B 4Y8", "CA")])
+
+    # the address nudge must actually reach the page
+    a, b = io.BytesIO(), io.BytesIO()
+    base = {**config.PRESET_DEFAULTS, "brand_name": "X",
+            "return_address": ["1 Somewhere St", "Provo, UT 84604", ""]}
+    render(a, [SAMPLE], base)
+    render(b, [SAMPLE], {**base, "addr_dx_in": 1.0})
+    assert a.getvalue() != b.getvalue(), "addr_dx_in had no effect"
 
     # Logo ink bounds: art usually carries blank padding, and image y runs down
     # while PDF y runs up — get that flip wrong and every logo sits off-corner.
